@@ -1,0 +1,20 @@
+[project]
+name = "epy"
+version = "0.1.0"
+description = "A terminal EPUB reader with vim-like keybindings"
+readme = "README.md"
+authors = [
+    { name = "mei", email = "konecho@outlook.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "ebooklib>=0.18",
+    "beautifulsoup4>=4.12",
+]
+
+[project.scripts]
+epy = "epy:main"
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"
