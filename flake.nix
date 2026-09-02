@@ -43,7 +43,6 @@
             python.pkgs.ebooklib
             python.pkgs.beautifulsoup4
             python.pkgs.pytest
-            pkgs.uv
           ];
         };
       });
