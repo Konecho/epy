@@ -42,6 +42,7 @@ class EpubReader:
         self.message = ""
         self.at_end = False  # Whether we're at the end of current chapter
         self.at_start = False  # Whether we're at the start of current chapter
+        self.toc_input = ""  # Number input for TOC jump
 
         # Load settings
         settings = load_settings()
@@ -171,7 +172,7 @@ class EpubReader:
 
     def _draw_toc(self, stdscr, height: int, width: int):
         """Draw table of contents overlay."""
-        visible_height = height - 3
+        visible_height = height - 4  # Reserve space for input line
         toc_start = max(0, self.toc_selection - visible_height + 2)
 
         try:
@@ -184,7 +185,7 @@ class EpubReader:
             for i in range(visible_height):
                 idx = toc_start + i
                 y = 3 + i
-                if y >= height - 1 or idx >= len(self.chapters):
+                if y >= height - 2 or idx >= len(self.chapters):
                     break
 
                 num = f"{idx + 1:>3}."
@@ -203,6 +204,13 @@ class EpubReader:
                     stdscr.attroff(curses.A_REVERSE)
                 else:
                     stdscr.addstr(y, 0, line)
+
+            # Input line at bottom
+            input_y = height - 2
+            if self.toc_input:
+                stdscr.addstr(input_y, 0, f" Go to: {self.toc_input}_".ljust(width))
+            else:
+                stdscr.addstr(input_y, 0, " Type number + Enter to jump ".ljust(width))
         except curses.error:
             pass
 
@@ -362,18 +370,38 @@ class EpubReader:
                     # TOC navigation
                     if key in (ord("q"), 27):  # q or Escape
                         self.show_toc = False
+                        self.toc_input = ""
                     elif key in (curses.KEY_UP, ord("k")):
                         self.toc_selection = max(0, self.toc_selection - 1)
+                        self.toc_input = ""
                     elif key in (curses.KEY_DOWN, ord("j")):
                         self.toc_selection = min(len(self.chapters) - 1, self.toc_selection + 1)
+                        self.toc_input = ""
                     elif key in (curses.KEY_ENTER, 10, 13):  # Enter
-                        self.current_chapter = self.toc_selection
-                        self.scroll_offset = 0
+                        if self.toc_input:
+                            # Jump to typed chapter number
+                            try:
+                                target = int(self.toc_input) - 1
+                                if 0 <= target < len(self.chapters):
+                                    self.current_chapter = target
+                                    self.scroll_offset = 0
+                            except ValueError:
+                                pass
+                            self.toc_input = ""
+                        else:
+                            # Jump to selected chapter
+                            self.current_chapter = self.toc_selection
+                            self.scroll_offset = 0
                         self.show_toc = False
                     elif key == 9:  # Tab
                         self.current_chapter = self.toc_selection
                         self.scroll_offset = 0
                         self.show_toc = False
+                        self.toc_input = ""
+                    elif key in (curses.KEY_BACKSPACE, 127, 8):  # Backspace
+                        self.toc_input = self.toc_input[:-1]
+                    elif ord("0") <= key <= ord("9"):
+                        self.toc_input += chr(key)
                 else:
                     # Content navigation
                     raw_lines = self._get_lines(self.current_chapter)
