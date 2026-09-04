@@ -146,6 +146,8 @@ class EpubReader:
             "  l / →    Page down",
             "  j / ↓    Scroll down",
             "  k / ↑    Scroll up",
+            "  n        Next chapter",
+            "  p        Previous chapter",
             "  Tab      Toggle table of contents",
             "  s        Toggle status bar",
             "  c        Cycle color theme",
@@ -309,6 +311,15 @@ class EpubReader:
             return True
         return False
 
+    def _prev_chapter(self):
+        """Switch to previous chapter and go to start."""
+        if self.current_chapter > 0:
+            self.current_chapter -= 1
+            self.scroll_offset = 0
+            self.message = f"Chapter {self.current_chapter + 1}"
+            return True
+        return False
+
     def _prev_chapter_end(self):
         """Switch to previous chapter and go to end."""
         if self.current_chapter > 0:
@@ -430,6 +441,10 @@ class EpubReader:
                     elif key == ord("c"):
                         self.current_theme = (self.current_theme + 1) % len(THEMES)
                         self._apply_theme(stdscr)
+                    elif key == ord("n"):
+                        self._next_chapter()
+                    elif key == ord("p"):
+                        self._prev_chapter()
                     elif key in (ord("j"), curses.KEY_DOWN):
                         if self.scroll_offset >= max_scroll:
                             # At end of chapter, go to next
