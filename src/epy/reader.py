@@ -47,6 +47,11 @@ class EpubReader:
         # Load settings
         settings = load_settings()
         self.show_status_bar = settings.get("show_status_bar", True)
+        self.show_progress_bar = settings.get("show_progress_bar", False)
+
+        # Cache of wrapped line counts per chapter, keyed by terminal width.
+        self._line_counts: list[int] | None = None
+        self._line_counts_width: int | None = None
 
         self._load_book()
         self._restore_progress()
@@ -150,6 +155,54 @@ class EpubReader:
             except curses.error:
                 pass
 
+    def _draw_progress_bar(self, stdscr, height: int, width: int):
+        """Underline part of the last visible line to show book-wide progress."""
+        if not self.show_progress_bar:
+            return
+
+        visible_height = height - 1 if self.show_status_bar else height
+        y = visible_height - 1  # last content row
+        progress = self._overall_progress(width, visible_height)
+        bar_len = int(round(progress * width))
+        if bar_len <= 0:
+            return
+        # Never touch the bottom-right cell, which curses refuses to write to.
+        if y == height - 1:
+            bar_len = min(bar_len, width - 1)
+
+        try:
+            stdscr.chgat(y, 0, bar_len, curses.color_pair(1) | curses.A_UNDERLINE)
+        except curses.error:
+            pass
+
+    def _chapter_line_counts(self, width: int) -> list[int]:
+        """Number of wrapped display lines per chapter (cached by width)."""
+        if self._line_counts is not None and self._line_counts_width == width:
+            return self._line_counts
+
+        counts = []
+        for _, content in self.chapters:
+            count = 0
+            for line in content.split("\n"):
+                if not line:
+                    count += 1
+                else:
+                    count += len(self._wrap_line(line, width))
+            counts.append(count)
+
+        self._line_counts = counts
+        self._line_counts_width = width
+        return counts
+
+    def _overall_progress(self, width: int, visible_height: int) -> float:
+        """Fraction (0.0-1.0) of the whole book read at the current position."""
+        counts = self._chapter_line_counts(width)
+        total = sum(counts)
+        if total <= 0:
+            return 1.0
+        read = sum(counts[: self.current_chapter]) + self.scroll_offset + visible_height
+        return max(0.0, min(1.0, read / total))
+
     def _draw_help(self, stdscr, height: int, width: int):
         """Draw help overlay."""
         help_lines = [
@@ -163,6 +216,7 @@ class EpubReader:
             "  p        Previous chapter",
             "  Tab      Toggle table of contents",
             "  s        Toggle status bar",
+            "  b        Toggle progress bar",
             "  c        Cycle color theme",
             "  g        Go to first line",
             "  G        Go to last line",
@@ -391,6 +445,7 @@ class EpubReader:
                     self._draw_toc(stdscr, height, width)
                 else:
                     self._draw_content(stdscr, height, width)
+                    self._draw_progress_bar(stdscr, height, width)
                     self._draw_end_marker(stdscr, height, width)
                     self._draw_start_marker(stdscr, height, width)
 
@@ -464,6 +519,10 @@ class EpubReader:
                     elif key == ord("s"):
                         self.show_status_bar = not self.show_status_bar
                         save_settings({"show_status_bar": self.show_status_bar})
+                    elif key == ord("b"):
+                        self.show_progress_bar = not self.show_progress_bar
+                        save_settings({"show_progress_bar": self.show_progress_bar})
+                        self.message = "Progress bar on" if self.show_progress_bar else "Progress bar off"
                     elif key == ord("c"):
                         self.current_theme = (self.current_theme + 1) % len(THEMES)
                         self._apply_theme(stdscr)

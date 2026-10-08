@@ -97,10 +97,12 @@ def load_settings() -> dict:
 
 
 def save_settings(settings: dict):
-    """Save global settings."""
+    """Save global settings, merging with any existing values."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    current = load_settings()
+    current.update(settings)
     try:
         with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(settings, f, ensure_ascii=False, indent=2)
+            json.dump(current, f, ensure_ascii=False, indent=2)
     except OSError:
         pass
