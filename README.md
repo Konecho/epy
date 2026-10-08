@@ -56,7 +56,7 @@ uv run epy
 | `G` | Go to bottom |
 | `Tab` | Toggle table of contents |
 | `s` | Toggle status bar |
-| `b` | Toggle progress bar (underlines the last line up to whole-book progress) |
+| `b` | Toggle progress bars (book-wide bar under the last line + chapter bar in the last column) |
 | `c` | Cycle color theme |
 | `?` | Show help |
 | `q` | Quit |

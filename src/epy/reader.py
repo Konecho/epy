@@ -163,7 +163,8 @@ class EpubReader:
         visible_height = height - 1 if self.show_status_bar else height
         y = visible_height - 1  # last content row
         progress = self._overall_progress(width, visible_height)
-        bar_len = int(round(progress * width))
+        bar_max = self._text_width(width)
+        bar_len = min(bar_max, int(round(progress * bar_max)))
         if bar_len <= 0:
             return
         # Never touch the bottom-right cell, which curses refuses to write to.
@@ -175,9 +176,26 @@ class EpubReader:
         except curses.error:
             pass
 
+    def _draw_chapter_bar(self, stdscr, height: int, width: int):
+        """Fill the rightmost column to show progress within the chapter."""
+        if not self.show_progress_bar or width < 2:
+            return
+
+        visible_height = height - 1 if self.show_status_bar else height
+        progress = self._chapter_progress(width, visible_height)
+        filled = int(round(progress * visible_height))
+        attr = curses.color_pair(1) | curses.A_REVERSE
+        x = width - 1
+        for y in range(min(filled, visible_height)):
+            try:
+                stdscr.chgat(y, x, 1, attr)
+            except curses.error:
+                pass
+
     def _chapter_line_counts(self, width: int) -> list[int]:
-        """Number of wrapped display lines per chapter (cached by width)."""
-        if self._line_counts is not None and self._line_counts_width == width:
+        """Number of wrapped display lines per chapter (cached by text width)."""
+        text_width = self._text_width(width)
+        if self._line_counts is not None and self._line_counts_width == text_width:
             return self._line_counts
 
         counts = []
@@ -187,11 +205,11 @@ class EpubReader:
                 if not line:
                     count += 1
                 else:
-                    count += len(self._wrap_line(line, width))
+                    count += len(self._wrap_line(line, text_width))
             counts.append(count)
 
         self._line_counts = counts
-        self._line_counts_width = width
+        self._line_counts_width = text_width
         return counts
 
     def _overall_progress(self, width: int, visible_height: int) -> float:
@@ -201,6 +219,17 @@ class EpubReader:
         if total <= 0:
             return 1.0
         read = sum(counts[: self.current_chapter]) + self.scroll_offset + visible_height
+        return max(0.0, min(1.0, read / total))
+
+    def _chapter_progress(self, width: int, visible_height: int) -> float:
+        """Fraction (0.0-1.0) of the current chapter read."""
+        counts = self._chapter_line_counts(width)
+        if not (0 <= self.current_chapter < len(counts)):
+            return 1.0
+        total = counts[self.current_chapter]
+        if total <= 0:
+            return 1.0
+        read = self.scroll_offset + visible_height
         return max(0.0, min(1.0, read / total))
 
     def _draw_help(self, stdscr, height: int, width: int):
@@ -216,7 +245,7 @@ class EpubReader:
             "  p        Previous chapter",
             "  Tab      Toggle table of contents",
             "  s        Toggle status bar",
-            "  b        Toggle progress bar",
+            "  b        Toggle progress bars (book + chapter)",
             "  c        Cycle color theme",
             "  g        Go to first line",
             "  G        Go to last line",
@@ -308,6 +337,12 @@ class EpubReader:
             current += char_w
         return "".join(result) + " " * max(0, width - current)
 
+    def _text_width(self, width: int) -> int:
+        """Usable text width, reserving the last column for the chapter bar."""
+        if self.show_progress_bar and width > 1:
+            return width - 1
+        return width
+
     def _wrap_line(self, line: str, width: int) -> list[str]:
         """Wrap a line to fit within width, breaking at word boundaries."""
         if self._str_width(line) <= width:
@@ -352,6 +387,7 @@ class EpubReader:
         """Draw chapter content."""
         raw_lines = self._get_lines(self.current_chapter)
         visible_height = height - 1 if self.show_status_bar else height
+        text_width = self._text_width(width)
 
         # Pre-wrap all lines and build display lines
         display_lines = []
@@ -359,7 +395,7 @@ class EpubReader:
             if not line:
                 display_lines.append("")
             else:
-                display_lines.extend(self._wrap_line(line, width))
+                display_lines.extend(self._wrap_line(line, text_width))
 
         # Ensure scroll_offset is valid - allow scrolling until last line is visible
         max_offset = max(0, len(display_lines) - visible_height)
@@ -380,7 +416,7 @@ class EpubReader:
 
             line = display_lines[line_idx]
             try:
-                stdscr.addstr(top_row + i, 0, line[:width], curses.color_pair(1))
+                stdscr.addstr(top_row + i, 0, line[:text_width], curses.color_pair(1))
             except curses.error:
                 pass
 
@@ -446,6 +482,7 @@ class EpubReader:
                 else:
                     self._draw_content(stdscr, height, width)
                     self._draw_progress_bar(stdscr, height, width)
+                    self._draw_chapter_bar(stdscr, height, width)
                     self._draw_end_marker(stdscr, height, width)
                     self._draw_start_marker(stdscr, height, width)
 
@@ -500,12 +537,13 @@ class EpubReader:
                     visible_height = height - 1 if self.show_status_bar else height
 
                     # Calculate display lines for accurate max_scroll
+                    text_width = self._text_width(width)
                     display_lines = []
                     for line in raw_lines:
                         if not line:
                             display_lines.append("")
                         else:
-                            display_lines.extend(self._wrap_line(line, width))
+                            display_lines.extend(self._wrap_line(line, text_width))
                     max_scroll = max(0, len(display_lines) - visible_height)
 
                     if key == ord("q"):
@@ -522,7 +560,7 @@ class EpubReader:
                     elif key == ord("b"):
                         self.show_progress_bar = not self.show_progress_bar
                         save_settings({"show_progress_bar": self.show_progress_bar})
-                        self.message = "Progress bar on" if self.show_progress_bar else "Progress bar off"
+                        self.message = "Progress bars on" if self.show_progress_bar else "Progress bars off"
                     elif key == ord("c"):
                         self.current_theme = (self.current_theme + 1) % len(THEMES)
                         self._apply_theme(stdscr)
