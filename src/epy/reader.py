@@ -44,6 +44,8 @@ class EpubReader:
         self.show_bookshelf = False
         self.history: list[dict] = []
         self.shelf_selection = 0
+        self.height = 0
+        self.width = 0
         self.at_end = False  # Whether we're at the end of current chapter
         self.at_start = False  # Whether we're at the start of current chapter
         self.toc_input = ""  # Number input for TOC jump
@@ -113,7 +115,25 @@ class EpubReader:
         title = ""
         if 0 <= self.current_chapter < len(self.chapters):
             title = self.chapters[self.current_chapter][0]
-        save_progress(self.book_id, self.current_chapter, self.scroll_offset, title, self.book_title)
+        save_progress(
+            self.book_id,
+            self.current_chapter,
+            self.scroll_offset,
+            title,
+            self.book_title,
+            self._current_percent(),
+        )
+
+    def _visible_height(self) -> int:
+        """Number of content rows for the current status-bar setting."""
+        return self.height - 1 if self.show_status_bar else self.height
+
+    def _current_percent(self) -> int | None:
+        """Whole-book reading percentage at the current position."""
+        visible_height = self._visible_height()
+        if not self.width or not visible_height or not self.chapters:
+            return None
+        return int(round(self._overall_progress(self.width, visible_height) * 100))
 
     def _apply_theme(self, stdscr):
         """Apply the current color theme."""
@@ -385,12 +405,12 @@ class EpubReader:
 
                 item = self.history[idx]
                 prefix = ">> " if idx == self.shelf_selection else "   "
-                line = (
-                    f"{prefix}{item.get('title', '')}"
-                    f"   ch.{item.get('chapter', 0) + 1}"
-                    f"   {self._format_ago(item.get('last_opened', 0))}"
-                )
-                line = self._fit(line, width)
+                percent = item.get("percent")
+                pct = f"{percent:>3}%" if isinstance(percent, int) else "   -"
+                tail = f"{pct}  ch.{item.get('chapter', 0) + 1}  {self._format_ago(item.get('last_opened', 0))}"
+                title_width = max(0, width - self._str_width(prefix) - self._str_width(tail) - 2)
+                title = self._fit(item.get("title", ""), title_width)
+                line = self._fit(f"{prefix}{title}  {tail}", width)
 
                 if idx == self.shelf_selection:
                     stdscr.attron(curses.A_REVERSE)
@@ -555,6 +575,7 @@ class EpubReader:
             while True:
                 stdscr.clear()
                 height, width = stdscr.getmaxyx()
+                self.height, self.width = height, width
 
                 if not self.chapters:
                     stdscr.addstr(0, 0, "No chapters found in this EPUB file.")

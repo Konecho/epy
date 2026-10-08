@@ -76,7 +76,9 @@ When the table of contents is open:
 ### Bookshelf
 
 Press `H` to open the bookshelf: a list of previously opened books, most
-recently read first, with the last chapter and how long ago it was opened.
+recently read first, with the whole-book reading percentage, the last
+chapter, and how long ago it was opened. Books opened before this feature
+existed show `-` until they are saved again.
 
 | Key | Action |
 |-----|--------|

@@ -27,7 +27,7 @@ def load_progress(book_id: str) -> dict | None:
 
 
 def save_progress(book_id: str, chapter: int, scroll: int, title: str | None = None,
-                  book_title: str | None = None):
+                  book_title: str | None = None, percent: int | None = None):
     """Save reading progress for a book."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     progress_file = DATA_DIR / "progress.json"
@@ -45,6 +45,7 @@ def save_progress(book_id: str, chapter: int, scroll: int, title: str | None = N
         "scroll": scroll,
         "title": title or "",
         "book_title": book_title or "",
+        "percent": percent,
         "last_opened": time.time(),
     }
 
@@ -80,6 +81,7 @@ def list_history() -> list[dict]:
             "title": info.get("book_title") or path.stem,
             "chapter": info.get("chapter", 0),
             "scroll": info.get("scroll", 0),
+            "percent": info.get("percent"),
             "last_opened": info.get("last_opened", 0),
         })
 
