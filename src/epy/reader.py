@@ -1,11 +1,12 @@
 """Terminal UI for EPUB reader."""
 
 import curses
+import time
 import unicodedata
 from pathlib import Path
 
 from .parser import parse_epub
-from .progress import get_book_id, load_progress, save_progress, load_settings, save_settings
+from .progress import get_book_id, load_progress, save_progress, load_settings, save_settings, list_history
 
 # Color themes: (name, text_fg, text_bg, bg, status_fg, status_bg)
 # Colors: -1=default, 0=black, 1=red, 2=green, 3=yellow, 4=blue, 5=magenta, 6=cyan, 7=white
@@ -40,6 +41,9 @@ class EpubReader:
         self.current_theme = 0
         self.toc_selection = 0
         self.message = ""
+        self.show_bookshelf = False
+        self.history: list[dict] = []
+        self.shelf_selection = 0
         self.at_end = False  # Whether we're at the end of current chapter
         self.at_start = False  # Whether we're at the start of current chapter
         self.toc_input = ""  # Number input for TOC jump
@@ -59,6 +63,31 @@ class EpubReader:
     def _load_book(self):
         """Load and parse the EPUB file."""
         self.book_title, self.chapters = parse_epub(self.filepath)
+
+    def _open_book(self, filepath: str | Path) -> bool:
+        """Switch to another EPUB, saving the current position first."""
+        path = Path(filepath)
+        try:
+            book_title, chapters = parse_epub(path)
+        except Exception as exc:  # noqa: BLE001 - surface any parse failure
+            self.message = f"Cannot open: {exc}"
+            return False
+
+        self._save_current_progress()
+        self.filepath = path
+        self.book_id = get_book_id(path)
+        self.book_title = book_title
+        self.chapters = chapters
+        self.current_chapter = 0
+        self.scroll_offset = 0
+        self.toc_selection = 0
+        self.toc_input = ""
+        self._line_counts = None
+        self._line_counts_width = None
+        self._restore_progress()
+        self.message = f"Opened: {self.book_title}"
+        self._save_current_progress()
+        return True
 
     def _restore_progress(self):
         """Restore reading progress from saved state."""
@@ -84,7 +113,7 @@ class EpubReader:
         title = ""
         if 0 <= self.current_chapter < len(self.chapters):
             title = self.chapters[self.current_chapter][0]
-        save_progress(self.book_id, self.current_chapter, self.scroll_offset, title)
+        save_progress(self.book_id, self.current_chapter, self.scroll_offset, title, self.book_title)
 
     def _apply_theme(self, stdscr):
         """Apply the current color theme."""
@@ -246,6 +275,7 @@ class EpubReader:
             "  Tab      Toggle table of contents",
             "  s        Toggle status bar",
             "  b        Toggle progress bars (book + chapter)",
+            "  H        Open bookshelf (reading history)",
             "  c        Cycle color theme",
             "  g        Go to first line",
             "  G        Go to last line",
@@ -309,6 +339,67 @@ class EpubReader:
                 stdscr.addstr(input_y, 0, self._fit(f" Go to: {self.toc_input}_", width))
             else:
                 stdscr.addstr(input_y, 0, self._fit(" ↑/↓ Select  Enter: Jump  Tab/Esc: Back ", width))
+        except curses.error:
+            pass
+
+    def _format_ago(self, timestamp: float) -> str:
+        """Format a timestamp as a short relative time."""
+        if not timestamp:
+            return ""
+        seconds = int(time.time() - timestamp)
+        if seconds < 60:
+            return "just now"
+        minutes = seconds // 60
+        if minutes < 60:
+            return f"{minutes}m ago"
+        hours = minutes // 60
+        if hours < 24:
+            return f"{hours}h ago"
+        days = hours // 24
+        if days < 30:
+            return f"{days}d ago"
+        months = days // 30
+        if months < 12:
+            return f"{months}mo ago"
+        return f"{days // 365}y ago"
+
+    def _draw_bookshelf(self, stdscr, height: int, width: int):
+        """Draw the reading-history bookshelf overlay."""
+        visible_height = max(0, height - 4)
+        start = max(0, self.shelf_selection - visible_height + 2)
+
+        try:
+            stdscr.attron(curses.A_REVERSE)
+            stdscr.addstr(1, 0, self._fit(" Bookshelf - History ".center(width), width))
+            stdscr.attroff(curses.A_REVERSE)
+            stdscr.addstr(2, 0, self._fit("─" * width, width))
+
+            if not self.history:
+                stdscr.addstr(3, 0, self._fit(" (no history yet) ", width))
+
+            for i in range(visible_height):
+                idx = start + i
+                y = 3 + i
+                if y >= height - 2 or idx >= len(self.history):
+                    break
+
+                item = self.history[idx]
+                prefix = ">> " if idx == self.shelf_selection else "   "
+                line = (
+                    f"{prefix}{item.get('title', '')}"
+                    f"   ch.{item.get('chapter', 0) + 1}"
+                    f"   {self._format_ago(item.get('last_opened', 0))}"
+                )
+                line = self._fit(line, width)
+
+                if idx == self.shelf_selection:
+                    stdscr.attron(curses.A_REVERSE)
+                    stdscr.addstr(y, 0, line)
+                    stdscr.attroff(curses.A_REVERSE)
+                else:
+                    stdscr.addstr(y, 0, line)
+
+            stdscr.addstr(height - 2, 0, self._fit(" ↑/↓ Select  Enter: Open  Esc/Tab: Back ", width))
         except curses.error:
             pass
 
@@ -477,6 +568,8 @@ class EpubReader:
                 if show_help:
                     self._draw_content(stdscr, height, width)
                     self._draw_help(stdscr, height, width)
+                elif self.show_bookshelf:
+                    self._draw_bookshelf(stdscr, height, width)
                 elif self.show_toc:
                     self._draw_toc(stdscr, height, width)
                 else:
@@ -497,7 +590,20 @@ class EpubReader:
                     show_help = False
                     continue
 
-                if self.show_toc:
+                if self.show_bookshelf:
+                    # Bookshelf navigation
+                    if key in (ord("q"), 27, 9):  # q/Esc/Tab: close
+                        self.show_bookshelf = False
+                    elif key in (curses.KEY_UP, ord("k")):
+                        self.shelf_selection = max(0, self.shelf_selection - 1)
+                    elif key in (curses.KEY_DOWN, ord("j")):
+                        self.shelf_selection = min(len(self.history) - 1, self.shelf_selection + 1)
+                    elif key in (curses.KEY_ENTER, 10, 13):  # Enter: open
+                        if 0 <= self.shelf_selection < len(self.history):
+                            path = self.history[self.shelf_selection]["path"]
+                            self.show_bookshelf = False
+                            self._open_book(path)
+                elif self.show_toc:
                     # TOC navigation
                     if key in (ord("q"), 27):  # q or Escape
                         self.show_toc = False
@@ -561,6 +667,13 @@ class EpubReader:
                         self.show_progress_bar = not self.show_progress_bar
                         save_settings({"show_progress_bar": self.show_progress_bar})
                         self.message = "Progress bars on" if self.show_progress_bar else "Progress bars off"
+                    elif key == ord("H"):
+                        self.history = list_history()
+                        self.shelf_selection = 0
+                        if self.history:
+                            self.show_bookshelf = True
+                        else:
+                            self.message = "No reading history yet"
                     elif key == ord("c"):
                         self.current_theme = (self.current_theme + 1) % len(THEMES)
                         self._apply_theme(stdscr)

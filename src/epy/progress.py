@@ -26,7 +26,8 @@ def load_progress(book_id: str) -> dict | None:
     return None
 
 
-def save_progress(book_id: str, chapter: int, scroll: int, title: str | None = None):
+def save_progress(book_id: str, chapter: int, scroll: int, title: str | None = None,
+                  book_title: str | None = None):
     """Save reading progress for a book."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     progress_file = DATA_DIR / "progress.json"
@@ -43,6 +44,7 @@ def save_progress(book_id: str, chapter: int, scroll: int, title: str | None = N
         "chapter": chapter,
         "scroll": scroll,
         "title": title or "",
+        "book_title": book_title or "",
         "last_opened": time.time(),
     }
 
@@ -51,6 +53,38 @@ def save_progress(book_id: str, chapter: int, scroll: int, title: str | None = N
             json.dump(data, f, ensure_ascii=False, indent=2)
     except OSError:
         pass
+
+
+def list_history() -> list[dict]:
+    """Return previously opened books, most recently opened first.
+
+    Books whose files no longer exist are skipped.
+    """
+    progress_file = DATA_DIR / "progress.json"
+    if not progress_file.exists():
+        return []
+
+    try:
+        with open(progress_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    history = []
+    for book_id, info in data.items():
+        path = Path(book_id)
+        if not path.exists():
+            continue
+        history.append({
+            "path": book_id,
+            "title": info.get("book_title") or path.stem,
+            "chapter": info.get("chapter", 0),
+            "scroll": info.get("scroll", 0),
+            "last_opened": info.get("last_opened", 0),
+        })
+
+    history.sort(key=lambda item: item["last_opened"], reverse=True)
+    return history
 
 
 def get_last_book() -> Path | None:

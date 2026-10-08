@@ -57,6 +57,7 @@ uv run epy
 | `Tab` | Toggle table of contents |
 | `s` | Toggle status bar |
 | `b` | Toggle progress bars (book-wide bar under the last line + chapter bar in the last column) |
+| `H` | Open bookshelf (reading history) |
 | `c` | Cycle color theme |
 | `?` | Show help |
 | `q` | Quit |
@@ -71,6 +72,18 @@ When the table of contents is open:
 | `k` / `↑` | Previous chapter |
 | `Enter` | Jump to selected chapter (or typed number) |
 | `Tab` / `Esc` / `q` | Close TOC and return to reading |
+
+### Bookshelf
+
+Press `H` to open the bookshelf: a list of previously opened books, most
+recently read first, with the last chapter and how long ago it was opened.
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | Next book |
+| `k` / `↑` | Previous book |
+| `Enter` | Open the selected book |
+| `Tab` / `Esc` / `q` | Close the bookshelf |
 
 ## Project Structure
 
