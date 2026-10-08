@@ -43,6 +43,61 @@ def clean_title(title: str) -> str:
     return title
 
 
+def extract_html_title(html_content: bytes) -> str:
+    """Extract a human readable title from an HTML document."""
+    soup = BeautifulSoup(html_content, "html.parser")
+    if soup.title and soup.title.string:
+        title = soup.title.string.strip()
+        if title:
+            return title
+    heading = soup.find(["h1", "h2", "h3"])
+    if heading:
+        return heading.get_text().strip()
+    return ""
+
+
+def build_toc_titles(book) -> dict[str, str]:
+    """Map document hrefs to the titles declared in the EPUB TOC (NCX/nav).
+
+    Titles are keyed by both the full normalized href and its basename so that
+    differences between manifest hrefs and TOC hrefs do not matter.
+    """
+    titles: dict[str, str] = {}
+
+    def add(href, title):
+        if not href or not isinstance(title, str):
+            return
+        title = title.strip()
+        if not title:
+            return
+        key = href.split("#")[0].lstrip("/")
+        titles[key] = title
+        titles[key.split("/")[-1]] = title
+
+    def walk(items):
+        for item in items:
+            if isinstance(item, (tuple, list)):
+                walk(item)
+                continue
+            add(getattr(item, "href", None), getattr(item, "title", None))
+            subitems = getattr(item, "subitems", None)
+            if subitems:
+                walk(subitems)
+
+    walk(book.toc or [])
+    return titles
+
+
+def _is_nav_document(item) -> bool:
+    """Return True for the EPUB navigation/TOC document itself."""
+    name = (item.get_name() or "").lower()
+    basename = name.split("/")[-1]
+    properties = getattr(item, "properties", None) or []
+    if isinstance(properties, str):
+        properties = [properties]
+    return "nav" in properties or basename in {"nav.xhtml", "nav.html", "toc.xhtml", "toc.html"}
+
+
 def parse_epub(filepath: Path, indent: bool = True) -> tuple[str, list[tuple[str, str]]]:
     """Parse EPUB file and return (title, chapters).
 
@@ -62,23 +117,46 @@ def parse_epub(filepath: Path, indent: bool = True) -> tuple[str, list[tuple[str
     else:
         book_title = filepath.stem
 
-    # Parse chapters
+    # Titles declared in the EPUB table of contents, keyed by href/basename.
+    toc_titles = build_toc_titles(book)
+
+    def make_chapter(item):
+        """Build a (title, content) pair for a document item."""
+        raw = item.get_content()
+        content = html_to_text(raw, indent=indent)
+        if not content.strip():
+            return None
+        name = item.get_name() or ""
+        item_title = getattr(item, "title", None)
+        title = (
+            toc_titles.get(name)
+            or toc_titles.get(name.lstrip("/"))
+            or toc_titles.get(name.split("/")[-1])
+            or (item_title.strip() if isinstance(item_title, str) else "")
+            or extract_html_title(raw)
+            or clean_title(name)
+        )
+        return (title, content)
+
+    # Parse chapters in spine order, skipping the navigation document.
     chapters = []
-    spine = book.spine
-    for item_id, _ in spine:
+    for item_id, _ in book.spine:
         item = book.get_item_with_id(item_id)
-        if item and item.get_type() == 9:  # ITEM_DOCUMENT
-            title = clean_title(item.get_name())
-            content = html_to_text(item.get_content(), indent=indent)
-            if content.strip():
-                chapters.append((title, content))
+        if not item or item.get_type() != 9:  # ITEM_DOCUMENT
+            continue
+        if _is_nav_document(item):
+            continue
+        chapter = make_chapter(item)
+        if chapter:
+            chapters.append(chapter)
 
     if not chapters:
         # Fallback: try all document items
         for item in book.get_items_of_type(9):
-            title = clean_title(item.get_name())
-            content = html_to_text(item.get_content(), indent=indent)
-            if content.strip():
-                chapters.append((title, content))
+            if _is_nav_document(item):
+                continue
+            chapter = make_chapter(item)
+            if chapter:
+                chapters.append(chapter)
 
     return book_title, chapters

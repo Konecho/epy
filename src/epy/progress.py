@@ -26,7 +26,7 @@ def load_progress(book_id: str) -> dict | None:
     return None
 
 
-def save_progress(book_id: str, chapter: int, scroll: int):
+def save_progress(book_id: str, chapter: int, scroll: int, title: str | None = None):
     """Save reading progress for a book."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     progress_file = DATA_DIR / "progress.json"
@@ -42,6 +42,7 @@ def save_progress(book_id: str, chapter: int, scroll: int):
     data[book_id] = {
         "chapter": chapter,
         "scroll": scroll,
+        "title": title or "",
         "last_opened": time.time(),
     }
 

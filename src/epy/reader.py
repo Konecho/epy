@@ -61,6 +61,14 @@ class EpubReader:
         if progress:
             chapter = progress.get("chapter", 0)
             scroll = progress.get("scroll", 0)
+            # Prefer matching the saved chapter title so that the position
+            # survives changes to the parsed chapter list.
+            saved_title = progress.get("title")
+            if saved_title:
+                for idx, (title, _) in enumerate(self.chapters):
+                    if title == saved_title:
+                        chapter = idx
+                        break
             if 0 <= chapter < len(self.chapters):
                 self.current_chapter = chapter
                 self.scroll_offset = scroll
@@ -68,7 +76,10 @@ class EpubReader:
 
     def _save_current_progress(self):
         """Save current reading progress."""
-        save_progress(self.book_id, self.current_chapter, self.scroll_offset)
+        title = ""
+        if 0 <= self.current_chapter < len(self.chapters):
+            title = self.chapters[self.current_chapter][0]
+        save_progress(self.book_id, self.current_chapter, self.scroll_offset, title)
 
     def _apply_theme(self, stdscr):
         """Apply the current color theme."""
@@ -111,7 +122,7 @@ class EpubReader:
 
         try:
             stdscr.attron(curses.color_pair(2))
-            stdscr.addstr(height - 1, 0, status[:width - 1].ljust(width))
+            stdscr.addstr(height - 1, 0, self._fit(status, width - 1))
             stdscr.attroff(curses.color_pair(2))
         except curses.error:
             pass
@@ -128,11 +139,13 @@ class EpubReader:
                 pass
 
     def _draw_start_marker(self, stdscr, height: int, width: int):
-        """Draw START marker when at start of chapter."""
+        """Draw the chapter number and START marker when at chapter start."""
         if self.at_start:
+            marker = f" Ch {self.current_chapter + 1} [START] "
+            x = max(0, (width - self._str_width(marker)) // 2)
             try:
                 stdscr.attron(curses.A_BOLD)
-                stdscr.addstr(0, width // 2 - 4, " [START] ")
+                stdscr.addstr(0, x, marker)
                 stdscr.attroff(curses.A_BOLD)
             except curses.error:
                 pass
@@ -198,7 +211,7 @@ class EpubReader:
                 marker = " *" if is_current else "  "
 
                 line = f"{prefix}{num} {title}{marker}"
-                line = line[:width - 1].ljust(width)
+                line = self._fit(line, width)
 
                 if idx == self.toc_selection:
                     stdscr.attron(curses.A_REVERSE)
@@ -210,9 +223,9 @@ class EpubReader:
             # Input line at bottom
             input_y = height - 2
             if self.toc_input:
-                stdscr.addstr(input_y, 0, f" Go to: {self.toc_input}_".ljust(width))
+                stdscr.addstr(input_y, 0, self._fit(f" Go to: {self.toc_input}_", width))
             else:
-                stdscr.addstr(input_y, 0, " Type number + Enter to jump ".ljust(width))
+                stdscr.addstr(input_y, 0, self._fit(" ↑/↓ Select  Enter: Jump  Tab/Esc: Back ", width))
         except curses.error:
             pass
 
@@ -228,6 +241,18 @@ class EpubReader:
     def _str_width(self, s: str) -> int:
         """Get display width of a string."""
         return sum(self._char_width(c) for c in s)
+
+    def _fit(self, s: str, width: int) -> str:
+        """Truncate a string to display width and pad it with spaces."""
+        result = []
+        current = 0
+        for char in s:
+            char_w = self._char_width(char)
+            if current + char_w > width:
+                break
+            result.append(char)
+            current += char_w
+        return "".join(result) + " " * max(0, width - current)
 
     def _wrap_line(self, line: str, width: int) -> list[str]:
         """Wrap a line to fit within width, breaking at word boundaries."""
@@ -291,14 +316,17 @@ class EpubReader:
         self.at_start = self.scroll_offset == 0
         self.at_end = self.scroll_offset >= max_offset
 
-        for i in range(visible_height):
+        # Keep the first row free for the [START] marker so it never covers the
+        # chapter text.
+        top_row = 1 if self.at_start else 0
+        for i in range(visible_height - top_row):
             line_idx = self.scroll_offset + i
             if line_idx >= len(display_lines):
                 break
 
             line = display_lines[line_idx]
             try:
-                stdscr.addstr(i, 0, line[:width], curses.color_pair(1))
+                stdscr.addstr(top_row + i, 0, line[:width], curses.color_pair(1))
             except curses.error:
                 pass
 
@@ -404,9 +432,7 @@ class EpubReader:
                             self.current_chapter = self.toc_selection
                             self.scroll_offset = 0
                         self.show_toc = False
-                    elif key == 9:  # Tab
-                        self.current_chapter = self.toc_selection
-                        self.scroll_offset = 0
+                    elif key == 9:  # Tab - return to reading without jumping
                         self.show_toc = False
                         self.toc_input = ""
                     elif key in (curses.KEY_BACKSPACE, 127, 8):  # Backspace

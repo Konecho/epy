@@ -68,8 +68,8 @@ When the table of contents is open:
 |-----|--------|
 | `j` / `↓` | Next chapter |
 | `k` / `↑` | Previous chapter |
-| `Enter` / `Tab` | Jump to selected chapter |
-| `Esc` / `q` | Close TOC |
+| `Enter` | Jump to selected chapter (or typed number) |
+| `Tab` / `Esc` / `q` | Close TOC and return to reading |
 
 ## Project Structure
 

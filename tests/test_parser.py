@@ -40,7 +40,9 @@ def test_parse_epub():
         title, chapters = parse_epub(test_file)
 
         assert title == "Test Book", f"Expected 'Test Book', got '{title}'"
-        assert len(chapters) == 3, f"Expected 3 chapters, got {len(chapters)}"
+        # The EPUB nav document must be skipped, leaving the two real chapters.
+        assert len(chapters) == 2, f"Expected 2 chapters, got {len(chapters)}"
+        assert [c[0] for c in chapters] == ["Introduction", "Getting Started"]
 
         # Check title cleaning
         for ch_title, content in chapters:
