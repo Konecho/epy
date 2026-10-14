@@ -7,6 +7,7 @@ A simple terminal EPUB reader with vim-like keybindings, built with Python and c
 - Read EPUB files in the terminal
 - Vim-like navigation (hjkl)
 - Table of contents (Tab)
+- Full-text search (`/`) with a TOC-like result list that jumps to the matching line
 - Chapter navigation
 - Word wrapping
 - White background with black text
@@ -55,12 +56,30 @@ uv run epy
 | `g` | Go to top |
 | `G` | Go to bottom |
 | `Tab` | Toggle table of contents |
+| `/` | Search the book |
 | `s` | Toggle status bar |
 | `b` | Toggle progress bars (book-wide bar under the last line + chapter bar in the last column) |
 | `H` | Open bookshelf (reading history) |
 | `c` | Cycle color theme |
 | `?` | Show help |
 | `q` | Quit |
+
+### Search
+
+Press `/` to search the whole book. Type a query and press `Enter`; the
+matches open in a TOC-like list showing the excerpt and the chapter number,
+with the matched word reverse-highlighted. Selecting an entry jumps straight
+to the matching line. Queries may contain non-ASCII text such as Chinese (the
+terminal locale must be UTF-8).
+
+| Key | Action |
+|-----|--------|
+| `/` | Open the search prompt |
+| `Enter` | Run the search / jump to the selected result |
+| `j` / `↓` | Next result |
+| `k` / `↑` | Previous result |
+| `/` | Start a new search (in the result list) |
+| `Esc` / `Tab` / `q` | Close the search prompt or result list |
 
 ### Table of Contents Navigation
 

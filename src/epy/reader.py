@@ -50,6 +50,14 @@ class EpubReader:
         self.at_start = False  # Whether we're at the start of current chapter
         self.toc_input = ""  # Number input for TOC jump
 
+        # Search state
+        self.searching = False  # Whether the search prompt is active
+        self.search_input = ""  # Query being typed
+        self.search_query = ""  # Last executed query
+        self.search_results: list[dict] = []  # [{chapter, line, text}]
+        self.show_search_results = False
+        self.search_selection = 0
+
         # Load settings
         settings = load_settings()
         self.show_status_bar = settings.get("show_status_bar", True)
@@ -84,6 +92,10 @@ class EpubReader:
         self.scroll_offset = 0
         self.toc_selection = 0
         self.toc_input = ""
+        self.search_input = ""
+        self.search_results = []
+        self.show_search_results = False
+        self.search_selection = 0
         self._line_counts = None
         self._line_counts_width = None
         self._restore_progress()
@@ -293,6 +305,7 @@ class EpubReader:
             "  n        Next chapter",
             "  p        Previous chapter",
             "  Tab      Toggle table of contents",
+            "  /        Search in the book",
             "  s        Toggle status bar",
             "  b        Toggle progress bars (book + chapter)",
             "  H        Open bookshelf (reading history)",
@@ -359,6 +372,205 @@ class EpubReader:
                 stdscr.addstr(input_y, 0, self._fit(f" Go to: {self.toc_input}_", width))
             else:
                 stdscr.addstr(input_y, 0, self._fit(" ↑/↓ Select  Enter: Jump  Tab/Esc: Back ", width))
+        except curses.error:
+            pass
+
+    def _snippet(self, text: str, query: str, width: int) -> str:
+        """Return a short excerpt of text with the match kept visible."""
+        if width <= 0 or not text:
+            return ""
+        lower = text.lower()
+        pos = lower.find(query.lower())
+        if pos < 0:
+            pos = 0
+        # Keep a little leading context, measured in display columns so wide
+        # characters (CJK) do not push the match out of view.
+        budget = max(0, min(8, width // 4))
+        start = pos
+        used = 0
+        while start > 0:
+            char_w = self._char_width(text[start - 1])
+            if used + char_w > budget:
+                break
+            used += char_w
+            start -= 1
+        excerpt = text[start:start + max(width, 20) * 2]
+        prefix = "…" if start > 0 else ""
+        return prefix + excerpt
+
+    def _draw_search_prompt(self, stdscr, height: int, width: int):
+        """Draw the search input prompt on the bottom row."""
+        y = height - 1
+        prompt = f" Search: {self.search_input}_"
+        if self.search_input:
+            prompt = f" Search: {self.search_input}_  (Enter: search  Esc: cancel) "
+        try:
+            stdscr.attron(curses.A_REVERSE)
+            stdscr.addstr(y, 0, self._fit(prompt, width - 1))
+            stdscr.attroff(curses.A_REVERSE)
+        except curses.error:
+            pass
+
+    def _run_search(self):
+        """Search all chapters for the typed query and build result list."""
+        query = self.search_input.strip()
+        self.searching = False
+        self.search_input = ""
+        if not query:
+            return
+
+        needle = query.lower()
+        results: list[dict] = []
+        max_results = 500
+        for chapter_idx, (_, content) in enumerate(self.chapters):
+            for line_idx, raw in enumerate(content.split("\n")):
+                if needle in raw.lower():
+                    results.append({"chapter": chapter_idx, "line": line_idx, "text": raw})
+                    if len(results) >= max_results:
+                        break
+            if len(results) >= max_results:
+                break
+
+        self.search_query = query
+        self.search_results = results
+        if not results:
+            self.message = f"No matches: {query}"
+            return
+        self.show_search_results = True
+        self.search_selection = 0
+        self.message = f"{len(results)} matches for '{query}'"
+
+    def _display_offset_for_line(self, chapter_idx: int, raw_idx: int, query: str = "") -> int:
+        """Display-line offset of a raw content line after wrapping."""
+        text_width = self._text_width(self.width)
+        raw_lines = self._get_lines(chapter_idx)
+        offset = 0
+        for i in range(min(raw_idx, len(raw_lines))):
+            line = raw_lines[i]
+            if not line:
+                offset += 1
+            else:
+                offset += len(self._wrap_line(line, text_width))
+
+        # Point at the wrapped segment that actually holds the match.
+        if query and 0 <= raw_idx < len(raw_lines):
+            raw = raw_lines[raw_idx]
+            segments = self._wrap_line(raw, text_width) if raw else [""]
+            needle = query.lower()
+            for skip, segment in enumerate(segments):
+                if needle in segment.lower():
+                    offset += skip
+                    break
+        return offset
+
+    def _jump_to_result(self):
+        """Jump to the currently selected search result."""
+        if not (0 <= self.search_selection < len(self.search_results)):
+            return
+        result = self.search_results[self.search_selection]
+        chapter_idx = result["chapter"]
+        if not (0 <= chapter_idx < len(self.chapters)):
+            return
+        if self.width <= 0:
+            self.width = 80
+        self.current_chapter = chapter_idx
+        self.scroll_offset = self._display_offset_for_line(chapter_idx, result["line"], self.search_query)
+        self.show_search_results = False
+        self.message = f"Match {self.search_selection + 1}/{len(self.search_results)}"
+        self._save_current_progress()
+
+    def _match_segments(self, text: str, query: str) -> list[tuple[str, bool]]:
+        """Split text into ``(piece, is_match)`` segments for highlighting."""
+        if not query or not text:
+            return [(text, False)]
+        lower = text.lower()
+        needle = query.lower()
+        if not needle or len(lower) != len(text) or needle not in lower:
+            return [(text, False)]
+
+        segments: list[tuple[str, bool]] = []
+        pos = 0
+        while True:
+            found = lower.find(needle, pos)
+            if found < 0:
+                break
+            if found > pos:
+                segments.append((text[pos:found], False))
+            segments.append((text[found:found + len(needle)], True))
+            pos = found + len(needle)
+        if pos < len(text):
+            segments.append((text[pos:], False))
+        return segments or [(text, False)]
+
+    def _draw_result_line(self, stdscr, y: int, width: int,
+                          segments: list[tuple[str, bool]], selected: bool):
+        """Draw one search-result row, reverse-highlighting the matches."""
+        if selected:
+            # Reverse the whole selected row, then punch the matches out so
+            # they still stand out against the highlighted selection.
+            line = self._fit("".join(text for text, _ in segments), width)
+            stdscr.attron(curses.A_REVERSE)
+            stdscr.addstr(y, 0, line)
+            stdscr.attroff(curses.A_REVERSE)
+            x = 0
+            for text, is_match in segments:
+                seg_width = self._str_width(text)
+                if is_match and seg_width > 0 and x + seg_width <= width:
+                    stdscr.chgat(y, x, seg_width, curses.color_pair(1))
+                x += seg_width
+        else:
+            x = 0
+            for text, is_match in segments:
+                if x >= width:
+                    return
+                seg_width = self._str_width(text)
+                piece = text if x + seg_width <= width else self._fit(text, width - x).rstrip()
+                if is_match and piece:
+                    stdscr.attron(curses.A_REVERSE)
+                    stdscr.addstr(y, x, piece)
+                    stdscr.attroff(curses.A_REVERSE)
+                else:
+                    stdscr.addstr(y, x, piece)
+                x += self._str_width(piece)
+            pad = width - x
+            if pad > 0:
+                stdscr.addstr(y, x, " " * pad)
+
+    def _draw_search_results(self, stdscr, height: int, width: int):
+        """Draw the search results list (TOC-like overlay)."""
+        visible_height = max(0, height - 4)
+        start = max(0, self.search_selection - visible_height + 2)
+
+        try:
+            header = f" Search: {self.search_query} - {len(self.search_results)} matches "
+            stdscr.attron(curses.A_REVERSE)
+            stdscr.addstr(1, 0, self._fit(header.center(width), width))
+            stdscr.attroff(curses.A_REVERSE)
+            stdscr.addstr(2, 0, self._fit("─" * width, width))
+
+            for i in range(visible_height):
+                idx = start + i
+                y = 3 + i
+                if y >= height - 2 or idx >= len(self.search_results):
+                    break
+
+                result = self.search_results[idx]
+                selected = idx == self.search_selection
+                prefix = ">> " if selected else "   "
+                num = f"{idx + 1:>3}."
+                tail = f"  ch.{result['chapter'] + 1}"
+                snippet_width = max(0, width - self._str_width(prefix) - self._str_width(num)
+                                    - 1 - self._str_width(tail))
+                snippet = self._snippet(result["text"], self.search_query, snippet_width)
+                snippet = self._fit(snippet, snippet_width).rstrip()
+                segments = [
+                    (f"{prefix}{num} ", False),
+                    *self._match_segments(snippet, self.search_query),
+                    (tail, False),
+                ]
+                self._draw_result_line(stdscr, y, width, segments, selected)
+
+            stdscr.addstr(height - 2, 0, self._fit(" ↑/↓ Select  Enter: Jump  /: New search  Esc: Back ", width))
         except curses.error:
             pass
 
@@ -559,6 +771,21 @@ class EpubReader:
             return True
         return False
 
+    def _read_key(self, stdscr):
+        """Read one key as ``(numeric_key, raw)``.
+
+        ``raw`` is an int for function keys and the typed character (a str)
+        for regular input, so multi-byte UTF-8 characters (e.g. Chinese) are
+        returned whole instead of as individual bytes.
+        """
+        try:
+            wch = stdscr.get_wch()
+        except curses.error:
+            return -1, None
+        if isinstance(wch, int):
+            return wch, wch
+        return ord(wch), wch
+
     def run(self, stdscr):
         """Main loop."""
         # Setup curses
@@ -581,7 +808,7 @@ class EpubReader:
                     stdscr.addstr(0, 0, "No chapters found in this EPUB file.")
                     stdscr.addstr(2, 0, "Press q to quit.")
                     stdscr.refresh()
-                    key = stdscr.getch()
+                    key, _ = self._read_key(stdscr)
                     if key == ord("q"):
                         break
                     continue
@@ -593,6 +820,8 @@ class EpubReader:
                     self._draw_bookshelf(stdscr, height, width)
                 elif self.show_toc:
                     self._draw_toc(stdscr, height, width)
+                elif self.show_search_results:
+                    self._draw_search_results(stdscr, height, width)
                 else:
                     self._draw_content(stdscr, height, width)
                     self._draw_progress_bar(stdscr, height, width)
@@ -600,12 +829,14 @@ class EpubReader:
                     self._draw_end_marker(stdscr, height, width)
                     self._draw_start_marker(stdscr, height, width)
 
-                if self.show_status_bar:
+                if self.show_status_bar and not self.searching:
                     self._draw_status_bar(stdscr, height, width)
+                if self.searching:
+                    self._draw_search_prompt(stdscr, height, width)
                 stdscr.refresh()
 
                 # Handle input
-                key = stdscr.getch()
+                key, raw_key = self._read_key(stdscr)
 
                 if show_help:
                     show_help = False
@@ -658,6 +889,35 @@ class EpubReader:
                         self.toc_input = self.toc_input[:-1]
                     elif ord("0") <= key <= ord("9"):
                         self.toc_input += chr(key)
+                elif self.show_search_results:
+                    # Search results navigation
+                    if key in (ord("q"), 27, 9):  # q/Esc/Tab: close
+                        self.show_search_results = False
+                    elif key == ord("/"):  # start a new search
+                        self.show_search_results = False
+                        self.searching = True
+                        self.search_input = ""
+                    elif key in (curses.KEY_UP, ord("k")):
+                        self.search_selection = max(0, self.search_selection - 1)
+                    elif key in (curses.KEY_DOWN, ord("j")):
+                        self.search_selection = min(len(self.search_results) - 1, self.search_selection + 1)
+                    elif key in (curses.KEY_ENTER, 10, 13):  # Enter: jump
+                        self._jump_to_result()
+                elif self.searching:
+                    # Search prompt input
+                    if key in (curses.KEY_ENTER, 10, 13):
+                        self._run_search()
+                    elif key == 27:  # Escape: cancel
+                        self.searching = False
+                        self.search_input = ""
+                    elif key == 9:  # Tab: cancel
+                        self.searching = False
+                        self.search_input = ""
+                    elif key in (curses.KEY_BACKSPACE, 127, 8):
+                        self.search_input = self.search_input[:-1]
+                    elif isinstance(raw_key, str) and raw_key.isprintable():
+                        # Append the whole character, including CJK/emoji.
+                        self.search_input += raw_key
                 else:
                     # Content navigation
                     raw_lines = self._get_lines(self.current_chapter)
@@ -676,6 +936,9 @@ class EpubReader:
                     if key == ord("q"):
                         self._save_current_progress()
                         break
+                    elif key == ord("/"):
+                        self.searching = True
+                        self.search_input = ""
                     elif key == 9:  # Tab
                         self.show_toc = True
                         self.toc_selection = self.current_chapter

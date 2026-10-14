@@ -1,6 +1,7 @@
 """epy - A terminal EPUB reader with vim-like keybindings."""
 
 import curses
+import locale
 import sys
 from pathlib import Path
 
@@ -31,6 +32,8 @@ def main() -> None:
         sys.exit(1)
 
     try:
+        # Initialize the locale so curses can decode wide (e.g. CJK) input.
+        locale.setlocale(locale.LC_ALL, "")
         reader = EpubReader(filepath)
         curses.wrapper(reader.run)
     except Exception as e:
